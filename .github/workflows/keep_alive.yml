@@ -1,0 +1,33 @@
+name: Keep Repo Alive
+
+# GitHub은 저장소에 60일 이상 push(커밋)가 없으면 예약된(cron) 워크플로를
+# 자동으로 비활성화합니다. 이 저장소는 daily_report.yml만 실행되고
+# 사람이 직접 커밋할 일이 거의 없으므로, 60일보다 훨씬 짧은 주기로
+# 아주 작은 커밋을 하나 만들어서 "저장소 활동"을 유지시켜 줍니다.
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'   # 매월 1일 00:00 UTC (60일 룰보다 충분히 짧은 주기)
+  workflow_dispatch: {}    # Actions 탭에서 수동 실행 가능
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Touch keep-alive file
+        run: |
+          mkdir -p .keepalive
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .keepalive/last_ping.txt
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .keepalive/last_ping.txt
+          git diff --staged --quiet || git commit -m "chore: keep-alive ping"
+          git push
