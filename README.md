@@ -120,8 +120,8 @@
 
 1. 저장소 페이지 → **Settings** → **Secrets and variables** → **Actions**
 2. **New repository secret** 클릭, 아래 2개를 각각 추가:
-   - Name: `TELEGRAM_TOKEN` / Value: (2번에서 받은 토큰)
-   - Name: `TELEGRAM_TO` / Value: (3번에서 받은 숫자)
+   - Name: `TELEGRAM_BOT_TOKEN` / Value: (2번에서 받은 토큰)
+   - Name: `TELEGRAM_CHAT_TO` / Value: (3번에서 받은 숫자)
 
 ### 5. Actions 활성화 확인 & 수동 테스트
 
