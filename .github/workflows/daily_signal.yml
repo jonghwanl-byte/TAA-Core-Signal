@@ -1,0 +1,30 @@
+name: Daily Core Signal
+
+on:
+  schedule:
+    # KST 06:30 = UTC 전날 21:30
+    # 월요일 KST 06:30 실행 -> UTC 기준 일요일 21:30 (cron 요일 0=일)
+    # 화~토 KST 06:30 실행 -> UTC 기준 전날 21:30 (cron 요일 1~5, 즉 월~금 UTC)
+    - cron: '30 21 * * 0-5'   # UTC 일~금 21:30 = KST 월~토 06:30
+  workflow_dispatch: {}        # 수동 실행 버튼(테스트용)
+
+jobs:
+  send-signal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy requests
+
+      - name: Run signal script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python core_signals.py
