@@ -83,25 +83,25 @@ def download(ticker: str) -> pd.DataFrame:
 
 
 def build_checkpoint_mask(df: pd.DataFrame, mode: str) -> np.ndarray:
-    """판정 시점(체크포인트) 불리언 마스크 생성."""
-    n = len(df)
+    """판정 시점(체크포인트) 불리언 마스크 생성.
+
+    주의: 이 함수는 백테스트와 실전(매일 재실행) 모두에서 동일하게 동작해야 한다.
+    "오늘이 데이터의 마지막 행"이라는 이유만으로 체크포인트로 취급하면 안 된다
+    (매일 실행되는 스크립트에서는 그날이 항상 마지막 행이므로, 그렇게 하면
+    평일마다 매번 새로 판정하는 것과 같아져 "주봉/월봉" 의도가 깨진다).
+    따라서 순수하게 달력 요일 기준으로만 체크포인트를 정한다.
+    """
+    dow = df["date"].dt.dayofweek  # 0=월 ... 4=금
     if mode == "weekly_friday":
-        # 그 주의 마지막 거래일(보통 금요일, 공휴일이면 그 전날)
-        wid = df["date"].dt.isocalendar().year.astype(str) + "-" + df["date"].dt.isocalendar().week.astype(str)
-        mask = (wid != wid.shift(-1)).to_numpy().copy()
-        mask[-1] = True
-        return mask
+        # 금요일이 곧 체크포인트. 금요일이 휴장(공휴일)인 주는 드물게 그 주에
+        # 체크포인트가 없을 수 있음(보수적 처리 - 과거 백테스트와 완전히 동일하진
+        # 않지만, "매일 재판정" 버그보다 훨씬 안전한 근사).
+        return (dow == 4).to_numpy()
     elif mode == "month_last_friday":
-        mid = df["date"].dt.year.astype(str) + "-" + df["date"].dt.month.astype(str)
-        mask = np.zeros(n, dtype=bool)
-        tmp = pd.Series(range(n))
-        for _, grp in tmp.groupby(mid):
-            fridays = grp[df.loc[grp, "date"].dt.dayofweek == 4]
-            if len(fridays) > 0:
-                mask[fridays.iloc[-1]] = True
-            else:
-                mask[grp.iloc[-1]] = True
-        return mask
+        # 달력만으로 "이번 달의 마지막 금요일"인지 판별 (미래 데이터 불필요)
+        next_week = df["date"] + pd.Timedelta(days=7)
+        is_last_friday = (dow == 4) & (next_week.dt.month != df["date"].dt.month)
+        return is_last_friday.to_numpy()
     else:
         raise ValueError(f"unknown checkpoint mode: {mode}")
 
