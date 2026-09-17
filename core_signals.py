@@ -1,12 +1,18 @@
 """
-코어 포트폴리오(QQQ/TLT/GLD/XLE) 일일 신호 계산 + 텔레그램 발송
-=================================================================
+코어 포트폴리오(QQQ/TLT/GLD/XLE) 일일 신호 계산 + 텔레그램 발송  (v2, 2026-09 최종 확정)
+=================================================================================
+v1 대비 주요 변경점:
+  - QQQ/GLD/XLE: 일봉 이동평균 -> "진짜 주봉 이동평균"(주봉 캔들로 집계한 20/50/100주선)으로 교체
+  - TLT: 주1회(금요일) 체크 -> 매일 체크로 변경 (일봉 20/120/200일선은 그대로)
+  - 코어 예산 80% -> 100%로 변경
+  - 캡: QQQ 60% / TLT 40% / GLD 20% / XLE 20%
+  - TLT가 매일 바뀔 수 있으므로, 화~금요일이라도 TLT 비중이 실제로 바뀐 날은 상세 메시지로 전환
+
 - 매일 KST 06:30(월~토) GitHub Actions로 실행
-- yfinance로 최신 데이터를 받아 20/120/200일선 히스테리시스 상태를 처음부터 다시 계산
-  (상태를 별도 저장하지 않고 매번 전체 재계산 -> 무상태(stateless) 설계, 버그 발생시 자동 복구됨)
-- 토요일/월요일: 상세 리밸런싱 메시지
-- 화~금요일: 보유 현황만(매매 없음)
-- 일요일: 미실행 (Actions 크론에서 제외)
+- yfinance로 최신 데이터를 받아 처음부터 다시 계산(무상태 설계)
+- 토요일/월요일 또는 TLT 변경일: 상세 리밸런싱 메시지
+- 그 외 화~금요일: 보유 현황만(매매 없음)
+- 일요일: 미실행
 
 필요 환경변수(GitHub Secrets):
   TELEGRAM_BOT_TOKEN
@@ -21,42 +27,42 @@ import yfinance as yf
 import requests
 
 # ============================================================
-# 1. 자산별 확정 파라미터 (2026-09 기준 최종 확정안)
+# 1. 자산별 확정 파라미터 (2026-09 최종 확정안)
 # ============================================================
 ASSET_CONFIG = {
     "QQQ": {
-        "ma": [20, 120, 200],
-        "buy_band": 0.005, "sell_band": 0.010,
-        "checkpoint": "weekly_friday",       # 매주 금요일 종가
+        "ma_type": "weekly", "ma": [20, 50, 100],
+        "checkpoint": "weekly_friday",
+        "buy_band": 0.010, "sell_band": 0.010,
         "scheme": "C",
-        "cap": 0.60,                          # 코어 내 최대비중
+        "cap": 0.60,
     },
     "TLT": {
-        "ma": [20, 120, 200],
-        "buy_band": 0.035, "sell_band": 0.000,
-        "checkpoint": "weekly_friday",
+        "ma_type": "daily", "ma": [20, 120, 200],
+        "checkpoint": "daily",
+        "buy_band": 0.040, "sell_band": 0.005,
         "scheme": "C",
         "cap": 0.40,
     },
     "GLD": {
-        "ma": [20, 120, 200],
-        "buy_band": 0.010, "sell_band": 0.010,
-        "checkpoint": "month_last_friday",    # 그 달의 마지막 금요일 종가
+        "ma_type": "weekly", "ma": [20, 50, 100],
+        "checkpoint": "weekly_friday",
+        "buy_band": 0.030, "sell_band": 0.020,
         "scheme": "C",
-        "cap": 0.35,
+        "cap": 0.20,
     },
     "XLE": {
-        "ma": [20, 120, 200],
-        "buy_band": 0.0425, "sell_band": 0.0275,
-        "checkpoint": "month_last_friday",
-        "scheme": "A",                        # 0/50/75/100%
+        "ma_type": "weekly", "ma": [20, 50, 100],
+        "checkpoint": "weekly_friday",
+        "buy_band": 0.030, "sell_band": 0.020,
+        "scheme": "A",
         "cap": 0.20,
     },
 }
 
-CORE_BUDGET = 1.00      # 코어 예산 100%
-TRADE_COST = 0.0005     # 참고용(메시지엔 표기 안 함, 백테스트 정합용)
-CASH_ANNUAL_RATE = 0.03  # 현금 3% (근사, 실제로는 단기금리 연동 가능)
+CORE_BUDGET = 1.00
+TRADE_COST = 0.0005
+REBALANCE_THRESHOLD = 0.005
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -64,11 +70,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 KST = datetime.timezone(datetime.timedelta(hours=9))
 
 
-# ============================================================
-# 2. 데이터 다운로드 + 상태 계산
-# ============================================================
-def download(ticker: str) -> pd.DataFrame:
-    """전체 히스토리를 받아 SMA까지 계산해서 반환."""
+def download_daily(ticker: str) -> pd.DataFrame:
     df = yf.download(ticker, period="max", auto_adjust=True, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -76,50 +78,31 @@ def download(ticker: str) -> pd.DataFrame:
     df.columns = [c.lower() for c in df.columns]
     if df.empty:
         raise RuntimeError(f"{ticker} 다운로드 실패")
-    for m in (20, 120, 200):
-        df[f"sma{m}"] = df["close"].rolling(m).mean()
-    df = df.dropna().reset_index(drop=True)
     return df
 
 
-def build_checkpoint_mask(df: pd.DataFrame, mode: str) -> np.ndarray:
-    """판정 시점(체크포인트) 불리언 마스크 생성.
-
-    주의: 이 함수는 백테스트와 실전(매일 재실행) 모두에서 동일하게 동작해야 한다.
-    "오늘이 데이터의 마지막 행"이라는 이유만으로 체크포인트로 취급하면 안 된다
-    (매일 실행되는 스크립트에서는 그날이 항상 마지막 행이므로, 그렇게 하면
-    평일마다 매번 새로 판정하는 것과 같아져 "주봉/월봉" 의도가 깨진다).
-    따라서 순수하게 달력 요일 기준으로만 체크포인트를 정한다.
-    """
-    dow = df["date"].dt.dayofweek  # 0=월 ... 4=금
-    if mode == "weekly_friday":
-        # 금요일이 곧 체크포인트. 금요일이 휴장(공휴일)인 주는 드물게 그 주에
-        # 체크포인트가 없을 수 있음(보수적 처리 - 과거 백테스트와 완전히 동일하진
-        # 않지만, "매일 재판정" 버그보다 훨씬 안전한 근사).
-        return (dow == 4).to_numpy()
-    elif mode == "month_last_friday":
-        # 달력만으로 "이번 달의 마지막 금요일"인지 판별 (미래 데이터 불필요)
-        next_week = df["date"] + pd.Timedelta(days=7)
-        is_last_friday = (dow == 4) & (next_week.dt.month != df["date"].dt.month)
-        return is_last_friday.to_numpy()
-    else:
-        raise ValueError(f"unknown checkpoint mode: {mode}")
+def build_weekly_bars(daily: pd.DataFrame) -> pd.DataFrame:
+    """일봉 -> 주봉 리샘플. 아직 끝나지 않은 이번 주(마지막 미완성 봉)는 제거."""
+    d = daily.set_index("date")
+    weekly = d.resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+    weekly = weekly.reset_index()
+    today = daily["date"].iloc[-1]
+    if today.dayofweek != 4:
+        weekly = weekly.iloc[:-1].reset_index(drop=True)
+    return weekly
 
 
-def ma_hysteresis_state(close: np.ndarray, sma: np.ndarray, buy_b: float, sell_b: float,
-                         mask: np.ndarray) -> np.ndarray:
-    """단일 이동평균선에 대한 0/1 히스테리시스 상태."""
+def ma_hysteresis_state(close: np.ndarray, sma_arr: np.ndarray, buy_b: float, sell_b: float) -> np.ndarray:
     n = len(close)
     state = np.zeros(n, dtype=int)
     cur = 0
-    upper = sma * (1 + buy_b)
-    lower = sma * (1 - sell_b)
+    upper = sma_arr * (1 + buy_b)
+    lower = sma_arr * (1 - sell_b)
     for i in range(n):
-        if mask[i]:
-            if cur == 0 and close[i] > upper[i]:
-                cur = 1
-            elif cur == 1 and close[i] < lower[i]:
-                cur = 0
+        if cur == 0 and close[i] > upper[i]:
+            cur = 1
+        elif cur == 1 and close[i] < lower[i]:
+            cur = 0
         state[i] = cur
     return state
 
@@ -148,64 +131,54 @@ SCHEME_FUNCS = {"A": scheme_A, "C": scheme_C}
 
 
 def compute_asset(ticker: str, cfg: dict) -> dict:
-    """자산 하나에 대한 전체 계산 결과(현재/직전 신호, MA 상태, 이격도 등)."""
-    df = download(ticker)
-    close = df["close"].to_numpy()
-    mask = build_checkpoint_mask(df, cfg["checkpoint"])
+    daily = download_daily(ticker)
+    for m in cfg["ma"]:
+        daily[f"sma{m}"] = daily["close"].rolling(m).mean()
+
+    if cfg["ma_type"] == "weekly":
+        bars = build_weekly_bars(daily)
+        for m in cfg["ma"]:
+            bars[f"sma{m}"] = bars["close"].rolling(m).mean()
+        bars = bars.dropna().reset_index(drop=True)
+        close = bars["close"].to_numpy()
+        dates = bars["date"]
+        lookback_label = "전주비"
+    else:
+        bars = daily.dropna(subset=[f"sma{m}" for m in cfg["ma"]]).reset_index(drop=True)
+        close = bars["close"].to_numpy()
+        dates = bars["date"]
+        lookback_label = "전일비"
 
     ma_states = {}
-    cnt = np.zeros(len(df), dtype=int)
+    cnt = np.zeros(len(bars), dtype=int)
     for m in cfg["ma"]:
-        st = ma_hysteresis_state(close, df[f"sma{m}"].to_numpy(), cfg["buy_band"], cfg["sell_band"], mask)
+        st = ma_hysteresis_state(close, bars[f"sma{m}"].to_numpy(), cfg["buy_band"], cfg["sell_band"])
         ma_states[m] = st
         cnt += st
 
     w = SCHEME_FUNCS[cfg["scheme"]](cnt)
 
     last_close = close[-1]
-    last_date = df["date"].iloc[-1]
-    ma_dev = {m: (last_close / df[f"sma{m}"].iloc[-1] - 1) for m in cfg["ma"]}
+    last_date = dates.iloc[-1]
+    ma_dev = {m: (last_close / bars[f"sma{m}"].iloc[-1] - 1) for m in cfg["ma"]}
 
-    # 체크포인트 기준 직전 값(=현재 보유중인 목표비중)과 최신 값(=새 목표비중)
-    checkpoint_idx = np.where(mask)[0]
-    is_today_checkpoint = mask[-1]
-    if len(checkpoint_idx) >= 2:
-        prev_w = w[checkpoint_idx[-2]] if is_today_checkpoint else w[checkpoint_idx[-1]]
-    else:
-        prev_w = w[0]
     new_w = w[-1]
-
-    # 전주/전월 대비 가격 등락률
-    if cfg["checkpoint"] == "weekly_friday":
-        lookback_label = "전주비"
-        prior_idx = checkpoint_idx[-2] if is_today_checkpoint and len(checkpoint_idx) >= 2 else (
-            checkpoint_idx[-1] if len(checkpoint_idx) >= 1 else 0)
-    else:
-        lookback_label = "전월비"
-        prior_idx = checkpoint_idx[-2] if is_today_checkpoint and len(checkpoint_idx) >= 2 else (
-            checkpoint_idx[-1] if len(checkpoint_idx) >= 1 else 0)
-    price_change = last_close / close[prior_idx] - 1 if close[prior_idx] else 0.0
+    prev_w = w[-2] if len(w) >= 2 else w[-1]
+    price_change = last_close / close[-2] - 1 if len(close) >= 2 else 0.0
 
     return {
-        "ticker": ticker,
-        "cfg": cfg,
-        "last_close": last_close,
-        "last_date": last_date,
+        "ticker": ticker, "cfg": cfg,
+        "last_close": last_close, "last_date": last_date,
         "ma_states": {m: int(ma_states[m][-1]) for m in cfg["ma"]},
         "ma_dev": ma_dev,
-        "prev_w": float(prev_w),   # 0~1, 자산 자체 신호값(캡 곱하기 전)
-        "new_w": float(new_w),
+        "prev_w": float(prev_w), "new_w": float(new_w),
         "lookback_label": lookback_label,
         "price_change": price_change,
-        "is_today_checkpoint": bool(is_today_checkpoint),
+        "changed_today": abs(new_w - prev_w) > 1e-9,
     }
 
 
-# ============================================================
-# 3. 코어 정규화(비례축소) 적용
-# ============================================================
 def apply_core_normalization(asset_results: dict, weight_key: str) -> dict:
-    """weight_key: 'prev_w' 또는 'new_w' — 자산 신호값에 캡 곱하고 정규화."""
     raw = {t: r[weight_key] * r["cfg"]["cap"] for t, r in asset_results.items()}
     raw_sum = sum(raw.values())
     scale = min(1.0, CORE_BUDGET / raw_sum) if raw_sum > 0 else 1.0
@@ -213,9 +186,6 @@ def apply_core_normalization(asset_results: dict, weight_key: str) -> dict:
     return {"weights": final, "raw_sum": raw_sum, "scale": scale, "normalized": scale < 0.999}
 
 
-# ============================================================
-# 4. 메시지 생성
-# ============================================================
 ARROW_UP, ARROW_DOWN = "🔴", "🔵"
 DOT_ON, DOT_OFF = "●", "○"
 
@@ -229,7 +199,7 @@ def build_message(results: dict, prev_alloc: dict, new_alloc: dict, is_detail_da
                    day_label: str, ref_date: str) -> str:
     lines = []
     if is_detail_day:
-        lines.append(f"📊 [{day_label}] 주간 리밸런싱 신호")
+        lines.append(f"📊 [{day_label}] 리밸런싱 신호")
     else:
         lines.append(f"📋 [{day_label}] 보유 현황 — 매매 없음")
     lines.append(f"{ref_date} 종가 기준")
@@ -239,7 +209,7 @@ def build_message(results: dict, prev_alloc: dict, new_alloc: dict, is_detail_da
     for t in ASSET_CONFIG:
         pv = prev_alloc["weights"][t] * 100
         nv = new_alloc["weights"][t] * 100
-        if abs(nv - pv) > 0.5:  # 0.5%p 미만 변화는 무시
+        if abs(nv - pv) > 0.5:
             changes.append((t, pv, nv))
 
     if is_detail_day:
@@ -251,15 +221,14 @@ def build_message(results: dict, prev_alloc: dict, new_alloc: dict, is_detail_da
             for t, pv, nv in changes:
                 arrow = ARROW_UP if nv > pv else ARROW_DOWN
                 r = results[t]
-                ma_arrows = []
-                for m in r["cfg"]["ma"]:
-                    ma_arrows.append(f"{m}일선{'▲' if r['ma_states'][m]==1 else '▼'}")
+                ma_arrows = [f"{m}{'주' if r['cfg']['ma_type']=='weekly' else '일'}선{'▲' if r['ma_states'][m]==1 else '▼'}"
+                             for m in r["cfg"]["ma"]]
                 lines.append(f"{arrow} {t} {pv:.0f}% → {nv:.0f}% ({', '.join(ma_arrows)})")
         else:
             lines.append("🔔 리밸런싱 필요 없음 (모든 비중 유지)")
         lines.append("")
 
-    lines.append(f"{DOT_ON} = 20/120/200일선 ON")
+    lines.append(f"{DOT_ON} = 이동평균선 ON")
     lines.append("")
 
     for t, cfg in ASSET_CONFIG.items():
@@ -268,12 +237,14 @@ def build_message(results: dict, prev_alloc: dict, new_alloc: dict, is_detail_da
         pv = prev_alloc["weights"][t] * 100
         dots = "".join(DOT_ON if r["ma_states"][m] == 1 else DOT_OFF for m in cfg["ma"])
         norm_note = f" (정규화 전 {pv:.0f}%)" if abs(nv - r["new_w"] * cfg["cap"] * 100) > 0.5 else ""
+        ma_unit = "주" if cfg["ma_type"] == "weekly" else "일"
         lines.append(f"{dots} {nv:.0f}%{norm_note} {t} (최대 {cfg['cap']*100:.0f}%)")
         sell_disp = cfg['sell_band']*100
-        band_str = f"밴드 매수+{cfg['buy_band']*100:.1f}% / 매도-{sell_disp:.1f}%" if sell_disp > 0 else f"밴드 매수+{cfg['buy_band']*100:.1f}% / 매도0%"
-        tf_str = "주봉" if "weekly" in cfg["checkpoint"] else "월봉"
+        band_str = (f"밴드 매수+{cfg['buy_band']*100:.1f}% / 매도-{sell_disp:.1f}%" if sell_disp > 0
+                    else f"밴드 매수+{cfg['buy_band']*100:.1f}% / 매도0%")
+        tf_str = "매일체크" if cfg['checkpoint'] == 'daily' else "주봉(금요일체크)"
         lines.append(f"   {r['lookback_label']} {fmt_pct(r['price_change'])} ({tf_str}, {band_str})")
-        dev_str = " / ".join(fmt_pct(r["ma_dev"][m]) for m in cfg["ma"])
+        dev_str = " / ".join(f"{m}{ma_unit}:{fmt_pct(r['ma_dev'][m])}" for m in cfg["ma"])
         lines.append(f"    MA 대비 {dev_str}")
         lines.append("")
 
@@ -283,27 +254,11 @@ def build_message(results: dict, prev_alloc: dict, new_alloc: dict, is_detail_da
 
     if not is_detail_day:
         lines.append("")
-        lines.append("ℹ️ 다음 판정: " + next_checkpoint_summary(results))
+        lines.append("ℹ️ 다음 정기판정: 금요일(QQQ·GLD·XLE) · TLT는 매일 재판정")
 
     return "\n".join(lines)
 
 
-def next_checkpoint_summary(results: dict) -> str:
-    parts = []
-    seen_weekly = False
-    for t, r in results.items():
-        cfg = r["cfg"]
-        if cfg["checkpoint"] == "weekly_friday" and not seen_weekly:
-            parts.append("금요일(QQQ·TLT)")
-            seen_weekly = True
-        elif cfg["checkpoint"] == "month_last_friday":
-            parts.append(f"이번달 마지막 금요일({t})")
-    return " · ".join(parts)
-
-
-# ============================================================
-# 5. 텔레그램 발송
-# ============================================================
 def send_telegram(text: str) -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[경고] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 미설정 - 콘솔에만 출력합니다.\n")
@@ -317,18 +272,14 @@ def send_telegram(text: str) -> None:
     print("텔레그램 발송 완료")
 
 
-# ============================================================
-# 6. 메인
-# ============================================================
 def main():
     now_kst = datetime.datetime.now(KST)
-    weekday = now_kst.weekday()  # 0=월 ... 5=토 6=일
+    weekday = now_kst.weekday()
 
     if weekday == 6:
         print("일요일 - 실행하지 않습니다.")
         return
 
-    is_detail_day = weekday in (5, 0)  # 토(5), 월(0)
     day_names = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
     day_label = day_names[weekday]
 
@@ -336,6 +287,8 @@ def main():
     for ticker, cfg in ASSET_CONFIG.items():
         print(f"{ticker} 계산 중...")
         results[ticker] = compute_asset(ticker, cfg)
+
+    is_detail_day = (weekday in (5, 0)) or results["TLT"]["changed_today"]
 
     prev_alloc = apply_core_normalization(results, "prev_w")
     new_alloc = apply_core_normalization(results, "new_w")
