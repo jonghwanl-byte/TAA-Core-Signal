@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     # 06:30 KST Mon-Fri = 21:30 UTC Sun-Thu
-    - cron: "30 21 * * 0-4"
+    - cron: "30 21 * * 0-5"
 
 jobs:
   signal:
