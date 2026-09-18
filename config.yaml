@@ -1,0 +1,81 @@
+portfolio:
+  name: A
+  caps:
+    QQQ: 0.90
+    TLT: 0.40
+    GLD: 0.80
+    XLE: 0.30
+
+data:
+  lookback_years: 12
+  auto_adjust: false
+  price_source: yfinance
+
+strategies:
+  QQQ:
+    combine: mean
+    children:
+      - timeframe: daily
+        mode: C
+        mas: [40, 100, 200]
+        bands:
+          - [0.01, 0.03]
+          - [0.01, 0.03]
+          - [0.01, 0.03]
+      - timeframe: weekly
+        mode: C
+        mas: [40, 100, 200]
+        bands:
+          - [0.00, 0.03]
+          - [0.00, 0.03]
+          - [0.00, 0.03]
+  TLT:
+    combine: mean
+    children:
+      - timeframe: daily
+        mode: C
+        mas: [10, 70, 180]
+        bands:
+          - [0.04, 0.02]
+          - [0.015, 0.02]
+          - [0.02, 0.015]
+      - timeframe: weekly
+        mode: D
+        mas: [10, 40, 160]
+        bands:
+          - [0.03, 0.00]
+          - [0.04, 0.00]
+          - [0.00, 0.035]
+  GLD:
+    combine: single
+    children:
+      - timeframe: daily
+        mode: C
+        mas: [10, 40, 170]
+        bands:
+          - [0.00, 0.01]
+          - [0.015, 0.01]
+          - [0.015, 0.02]
+  XLE:
+    combine: min
+    children:
+      - timeframe: daily
+        mode: C
+        mas: [20, 160, 200]
+        bands:
+          - [0.00, 0.04]
+          - [0.005, 0.02]
+          - [0.00, 0.01]
+      - timeframe: weekly
+        mode: D
+        mas: [50, 80, 110]
+        bands:
+          - [0.035, 0.035]
+          - [0.035, 0.035]
+          - [0.035, 0.035]
+
+korea_mapping:
+  QQQ: "한국상장 QQQ 추종 ETF 코드 입력"
+  TLT: "한국상장 미국 장기국채 ETF 코드 입력"
+  GLD: "한국상장 금 ETF 코드 입력"
+  XLE: "한국상장 미국 에너지 ETF 코드 입력"
