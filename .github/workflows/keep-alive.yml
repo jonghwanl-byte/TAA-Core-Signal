@@ -1,0 +1,41 @@
+name: Keep Actions Alive
+
+on:
+  schedule:
+    # Runs twice a month. This creates repository activity well before 60 days.
+    - cron: '17 0 1,16 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update keep-alive timestamp
+        shell: bash
+        run: |
+          mkdir -p .github
+          printf 'Last keep-alive: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > .github/keep-alive.txt
+
+      - name: Commit keep-alive update
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keep-alive.txt
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: keep scheduled workflows active"
+          git push
