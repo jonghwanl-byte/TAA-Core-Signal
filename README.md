@@ -44,7 +44,7 @@ README.md                              # 이 문서
    - `TELEGRAM_BOT_TOKEN` : 봇 토큰
    - `TELEGRAM_CHAT_ID` : Chat ID (숫자)
 4. 저장소 **Settings → Actions → General → Workflow permissions** 에서 **"Read and write permissions"** 선택 후 Save (keepalive 커밋에 필요)
-5. **Actions** 탭 → `Daily Core Signal` → **Run workflow** 로 수동 실행하고 텔레그램 메시지가 오는지 확인
+5. **Actions** 탭 → `Daily Core Signal` → **Run workflow** 로 수동 실행하고 텔레그램 메시지가 오는지 확인 (일요일이면 **force 체크**, 아니면 그대로 실행)
 6. `Keep Repo Alive` 도 **Run workflow** 로 한 번 실행해 `.keepalive` 커밋이 생기는지 확인
 
 ## 4. 메시지 종류
@@ -53,7 +53,7 @@ README.md                              # 이 문서
 |---|---|
 | 토요일 · 월요일 | 📊 **리밸런싱 상세** — 변경 항목(전일 대비 비중), 정규화 여부, 자산별 이평선 ON/OFF, MA 대비 이격 |
 | 화~금 | 📋 **보유 현황** — 매매 없음. 단, TLT 신호가 바뀐 날은 상세 메시지로 전환 |
-| 일요일 | 실행 안 함 |
+| 일요일 | 실행 안 함 (`일요일 - 실행하지 않습니다` 로그가 정상). 테스트하려면 Actions 수동 실행에서 **force 체크** |
 
 - TLT 신호가 바뀌면 합계 100% 정규화 때문에 QQQ · GLD · XLE 비중도 함께 바뀔 수 있습니다(정상 동작).
 - 메시지 상단에 `⚠️ 자산별 데이터 기준일 불일치` 가 나오면 데이터가 덜 갱신된 것이니 잠시 뒤 수동 재실행하세요.

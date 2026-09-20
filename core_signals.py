@@ -11,6 +11,7 @@ v3 대비 수정사항
   4) [옵션] 총 노출 배율(EXPOSURE_SCALE) 추가. 기본 1.0 = 기존 P와 동일. 0.9로 바꾸면 모든 목표비중에 0.9 곱함
      [옵션] 방식 C 정의 선택(C_JUMP). 기본 False = 기존 P. True = 변경 신호 개수 x 50%p (백테스트상 체결 지연에 더 민감)
   5) [안전] 자산별 데이터 기준일이 서로 다르면 메시지 상단에 경고 표시, 다운로드 3회 재시도
+  6) [테스트] 환경변수 FORCE_RUN=1 이면 일요일에도 실행(수동 테스트용, Actions 수동 실행의 force 옵션)
 
 변경하지 않은 것: 자산별 이평선/밴드/방식/Cap, 코어 예산 100% 정규화, 스케줄(KST 월~토 06:30)
 
@@ -283,8 +284,8 @@ def run(now_kst: datetime.datetime, downloader=None, sender=None):
     """한 번 실행. downloader/sender를 바꿔 끼우면 테스트 가능."""
     sender = sender or send_telegram
     weekday = now_kst.weekday()
-    if weekday == 6:
-        print("일요일 - 실행하지 않습니다.")
+    if weekday == 6 and not os.environ.get("FORCE_RUN"):
+        print("일요일 - 실행하지 않습니다. (테스트로 실행하려면 FORCE_RUN=1)")
         return None
 
     now_et = now_kst.astimezone(ET)
