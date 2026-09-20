@@ -6,7 +6,12 @@ name: Daily Core Signal
 on:
   schedule:
     - cron: '30 21 * * 0-5'
-  workflow_dispatch: {}          # Actions 탭의 "Run workflow" 버튼(수동 테스트용)
+  workflow_dispatch:             # Actions 탭의 "Run workflow" 버튼(수동 테스트용)
+    inputs:
+      force:
+        description: '일요일에도 강제 실행 (테스트용)'
+        type: boolean
+        default: false
 
 jobs:
   send-signal:
@@ -29,4 +34,5 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_RUN: ${{ inputs.force && '1' || '' }}
         run: python core_signals.py
