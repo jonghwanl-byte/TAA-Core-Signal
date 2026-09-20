@@ -1,0 +1,30 @@
+name: Keep Repo Alive
+
+# GitHub는 저장소에 60일간 활동(커밋)이 없으면 스케줄(cron) 워크플로를 자동으로 비활성화합니다.
+# 이 워크플로는 매주 일요일에 .keepalive 파일에 시각만 기록해 커밋하여 저장소를 '활동 중'으로 유지합니다.
+# 필요 설정: 저장소 Settings > Actions > General > Workflow permissions > "Read and write permissions"
+on:
+  schedule:
+    - cron: '0 3 * * 0'          # 매주 일요일 UTC 03:00 (KST 정오)
+  workflow_dispatch: {}          # 수동 실행 버튼
+
+permissions:
+  contents: write                # 커밋/푸시에 필요
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Update heartbeat file
+        run: date -u +"%Y-%m-%dT%H:%M:%SZ (keepalive)" > .keepalive
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "keepalive-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .keepalive
+          git diff --staged --quiet || git commit -m "chore: keepalive $(date -u +%F)"
+          git push
